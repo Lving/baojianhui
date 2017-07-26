@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-# -*- coding: utf-8 -*-
+# 多线程版本
 import concurrent.futures
 import os
+import random
 import time
 import logging
 
@@ -47,11 +48,31 @@ class BaoJianHui(object):
         # 'valCode': val
     }
 
-    def __init__(self, captchas_file='captchas\\', proxies_enable=False):
-        self.captchas_file = captchas_file
+    def __init__(self, captchas_file='captchas', proxies_enable=False, thread_name=''):
+        self.captchas_file = captchas_file+'\\'
         self.proxies_enable = proxies_enable
+        self.thread_name = thread_name
 
-    def requests_get(self, url, timeout=15, proxies=None, cookies=None, headers=None):
+    def random_user_agent(self):
+        agents = [
+            'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.1; Trident/6.0)',
+            'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Win64; x64; Trident/6.0)',
+            'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Trident/6.0)',
+            'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; WOW64; Trident/6.0)',
+            'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; Win64; x64; Trident/6.0)',
+            'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2; ARM; Trident/6.0)',
+            'Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 5.1; Trident/4.0; .NET CLR 2.0.50727; .NET CLR 3.0.04506.30;'
+            ' .NET CLR 3.0.04506.648)',
+            'Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 5.1; Trident/4.0; .NET CLR 2.0.50727; InfoPath.1',
+            'Mozilla/4.0 (compatible; GoogleToolbar 5.0.2124.2070; Windows 6.0; MSIE 8.0.6001.18241)',
+            'Mozilla/4.0 (compatible; MSIE 8.0; Windows NT 5.1; Trident/4.0; EasyBits Go v1.0; InfoPath.1;'
+            ' .NET CLR 2.0.50727; .NET CLR 3.0.4506.2152; .NET CLR 3.5.30729)',
+            'Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 6.0; SLCC1; .NET CLR 2.0.50727; Media Center PC 5.0; '
+            '.NET CLR 3.0.04506)'
+        ]
+        return random.choice(agents)
+
+    def requests_get(self, url, timeout=15, cookies=None, headers=None):
         """
         :param url:
         :param timeout:
@@ -62,50 +83,44 @@ class BaoJianHui(object):
         :return: response 对象
         """
         if not self.proxies_enable:
-        # if proxies == None:
             try:
                 return requests.get(url, timeout=timeout, cookies=cookies, headers=headers)
             except Exception as e:
                 # print(e)
-                logging.error(e)
-                return
+                logging.error('{}: {}'.format(self.thread_name, e))
+                return None
 
         else:
             try:
                 return requests.get(url, timeout=timeout, proxies=self.PROXY, cookies=cookies, headers=headers)
             except Exception as e:
                 # print(e)
-                logging.error(e)
-                return
+                logging.error('{}: {}'.format(self.thread_name, e))
+                return None
 
-
-    def get_cookie(self):
+    def prepare_request(self):
         """
         :return: cookie对象， 验证码图片文件名
         """
+        user_agent = self.random_user_agent()
+        self.captcha_headers['User-Agent'] = user_agent
+
         ts = int(time.time())
 
         val_url = 'http://iir.circ.gov.cn/web/servlet/ValidateCode?time={}'.format(ts)
 
         current_path = os.path.dirname(os.path.abspath(sys.argv[0]))
-        cookie_file = os.path.join(current_path, self.captchas_file + str(ts)+'.jpg')
-
-        # cookie_file = 'D:\\Code\\4_保监会\\captchas\\'+str(ts)+'.jpg'
+        cookie_file = os.path.join(current_path, self.captchas_file + str(ts) + '.jpg')
 
         r = self.requests_get(val_url, headers=self.captcha_headers)
 
-        # r = requests.get(val_url, headers=headers, timeout=12)
+        try:
+            with open(cookie_file, 'wb') as f:
+                f.write(r.content)
+        except Exception as e:
+            logging.error('{}: {}'.format(self.thread_name, e))
 
-        with open(cookie_file, 'wb') as f:
-            f.write(r.content)
-        # 构造cookie
-        # cookies = {}
-        # cookies['UM_distinctid'] = '15ca5bfc8f564f-0365860665670f8-51a2f73-100200-15ca5bfc8f658a'
-        # cookies['CNZZDATA1619462'] = 'cnzz_eid%3D2119936732-1497429142-%26ntime%3D1497511531'
-        # for i in r.cookies:
-        #     cookies[i.name] = i.value
-        # print(r.cookies)
-        return r.cookies, cookie_file
+        return r.cookies, cookie_file, user_agent
 
     def captcha_recognition(self, img_name):
         """
@@ -143,10 +158,11 @@ class BaoJianHui(object):
         detail = [i.xpath('text()')[0] for i in trs]
 
         if len(detail) == len(key):
-            return (dict(zip(key, detail)))
+            return dict(zip(key, detail))
         # print('html is not expected')
-        logging.warning('html is not excepted')
-        return None
+        else:
+            logging.warning('{}: {}'.format(self.thread_name, 'html is not excepted'))
+            return None
 
     def query(self, num_string):
 
@@ -156,35 +172,47 @@ class BaoJianHui(object):
         """
 
         for retry in range(self.RETRIES):
-            cookies, cookies_file = self.get_cookie()
-            captcha = self.captcha_recognition(cookies_file)
-            url = 'http://iir.circ.gov.cn/web/baoxyx!searchInfoBaoxyx.html?certificate_code={}&evelop_code=&name=&valCode={}'.format(num_string, captcha)
+            try:
+                cookies, cookies_file, user_agent = self.prepare_request()
+            except Exception as e:
+                logging.error('{}:{}'.format(self.thread_name, e))
+                continue
 
+            try:
+                captcha = self.captcha_recognition(cookies_file)
+            except Exception as e:
+                logging.error('{}: {}'.format(self.thread_name, e))
+                continue
+
+            self.query_headers['User-Agent'] = user_agent
+
+            url = 'http://iir.circ.gov.cn/web/baoxyx!searchInfoBaoxyx.html?certificate_code={}&evelop_code=&name=&valCode={}'.format(num_string, captcha)
             # 请求不成功 requests_get 返回None
+            # 非200的响应
             r = self.requests_get(url, cookies=cookies, headers=self.query_headers)
             # r = requests.get(url, cookies=cookies, headers=self.query_headers, timeout=12)
+            # print(r.status_code)
+            # print(r.text)
 
-            if r:
+            if r and r.status_code == 200:  # 请求正确返回且状态码为200
                 return self.parse(r.text)
-            else:
-                # print('attempt retry: %s' % (retry+1, ))
-                logging.warning('attempt retry : %s' % (retry+1, ))
+            else:  # 请求出错或者状态码不正确
+                time.sleep(10)
+                logging.warning('{}: {}'.format(self.thread_name, 'attempt retry : %s' % (retry + 1,)))
+
         else:
+            logging.warning('{}: {}'.format(self.thread_name, ' max retries'))
             return None
-
-
-        # return r.text
-        # print(self.parse(r.text))
 
 
 # test
 if __name__ == '__main__':
-    bjh1 = BaoJianHui(captchas_file='captchas1\\', proxies_enable=True)
-    bjh2 = BaoJianHui(captchas_file='captchas2\\', proxies_enable=True)
+    bjh1 = BaoJianHui(captchas_file='captchas1', proxies_enable=False, thread_name='Thread-1')
+    bjh2 = BaoJianHui(captchas_file='captchas2', proxies_enable=False, thread_name='Thread-2')
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         a = executor.submit(bjh1.query, '00201409130000000018')
-        b = executor.submit(bjh2.query, '00200903320800001748')
+        b = executor.submit(bjh2.query, '00200903320800001648')
 
         print(a.result())
         print(b.result())
